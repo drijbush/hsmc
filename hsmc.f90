@@ -216,6 +216,7 @@ Program hsmc
   Integer :: start, finish, rate
 
   Integer( Selected_int_kind( 18 ) ) :: mc_step
+  Integer( Selected_int_kind( 18 ) ) :: n_step
 
   Logical :: overlap
 
@@ -232,6 +233,9 @@ Program hsmc
 
   Write( *, * ) 'Rho, n'
   Read ( *, * ) rho, n
+
+  Write( *, * ) 'N steps?'
+  Read ( *, * ) n_step
 
   sigma = ( rho * lat_vecs%V / Real( n, wp ) ) ** ( 1.0_wp / 3.0_wp )
   Write( *, * ) 'Sigma = ', sigma
@@ -333,7 +337,7 @@ Program hsmc
   accept = 0
   accept_tot = 0
   Call system_clock( start, rate )
-  Do mc_step = 1, 2000000000
+  Do mc_step = 1, n_step
 
      Do
         Call Random_number( rand )
@@ -497,6 +501,7 @@ Program hsmc
         End Do
      End Do
   End Do
+  Open( 11, file = 'rdf.dat' )
   Do i = Lbound( rdf, Dim = 1 ), Ubound( rdf, Dim = 1 )
      sep = i * dr
      norm = ( sep + dr ) ** 3 - sep ** 3
@@ -508,6 +513,7 @@ Program hsmc
      Write( 11, * ) sep / sigma, rdf( i )
   End Do
 
+  Open( 10, file = 'config.dat' )
   Write( 10, '( "n = ", i0, 1x, "V = ", f0.3, 1x, "rho = ", f0.3 )' ) n, lat_vecs%V, rho
   Do i = 1, 3
      Write( 10, '( 3( g26.20, 1x ) )' ) lat_vecs%dir_vecs( i, : )
