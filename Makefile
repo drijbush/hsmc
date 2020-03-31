@@ -11,8 +11,9 @@ CFLAGS = -O
 FC = f77
 FFLAGS = -O
 F90 = gfortran
-F90FLAGS = -O -g -std=f2008 -Wall -Wextra -fcheck=all -finit-real=snan
-LDFLAGS = 
+#F90FLAGS = -O -g -std=f2008 -Wall -Wextra -fcheck=all -finit-real=snan
+F90FLAGS = -O3 -fopenmp -std=f2008 -Wall -Wextra 
+LDFLAGS = -fopenmp
 
 all: $(PROG)
 

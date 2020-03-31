@@ -122,7 +122,7 @@ Contains
 
   End Subroutine create
 
-  Function direct_to_frac( A, r ) Result( f )
+  Pure Function direct_to_frac( A, r ) Result( f )
 
     Real( wp ), Dimension( 1:3 ) :: f
 
@@ -359,50 +359,7 @@ Program hsmc
      by_new = Int( f( 2 ) * nby )
      bz_new = Int( f( 3 ) * nbz )
 
-     overlap = .False.
-     Outer_neighbour: Do inx = -1, 1
-        Do iny = -1, 1
-           Do inz = -1, 1
-              ibx = bx_new + inx
-              iby = by_new + iny
-              ibz = bz_new + inz
-              g_offset = 0.0_wp
-              If( bx_new + inx == nbx ) Then
-                 ibx = 0
-                 g_offset = g_offset + lat_vecs%dir_vecs( :, 1 )
-              End If
-              If( bx_new + inx == -1 ) Then
-                 ibx = nbx - 1
-                 g_offset = g_offset - lat_vecs%dir_vecs( :, 1 )
-              End If
-              If( by_new + iny == nby ) Then
-                 iby = 0
-                 g_offset = g_offset + lat_vecs%dir_vecs( :, 2 )
-              End If
-              If( by_new + iny == -1 ) Then
-                 iby = nby - 1
-                 g_offset = g_offset - lat_vecs%dir_vecs( :, 2 )
-              End If
-              If( bz_new + inz == nbz ) Then
-                 ibz = 0
-                 g_offset = g_offset + lat_vecs%dir_vecs( :, 3 )
-              End If
-              If( bz_new + inz == -1 ) Then
-                 ibz = nbz - 1
-                 g_offset = g_offset - lat_vecs%dir_vecs( :, 3 )
-              End If
-              Do i = 1, boxes( ibx, iby, ibz )%n
-                 If( inx == 0 .And. iny == 0 .And. inz == 0 .And. imove == i ) Cycle
-                 r = boxes( ibx, iby, ibz )%r( :, i )
-                 rij_sq = Dot_product( r + g_offset - r_new, r + g_offset - r_new )
-                 overlap = rij_sq < sigma * sigma
-                 If( overlap ) Then
-                    Exit Outer_neighbour
-                  End If
-               End Do
-           End Do
-        End Do
-     End Do Outer_neighbour
+     overlap = check_overlap( sigma, imove, r_new, lat_vecs, boxes ) 
 
      If( .Not. overlap ) Then
         Call boxes( bx, by, bz )%delete_entry( imove )
@@ -479,10 +436,15 @@ Program hsmc
      Stop "Overlaps in final config"
   End If
 
+  Write( *, * ) 'Calculating rdf'
   ! Calculate an rdf
   rdf = 0.0_wp
   dr = 0.05_wp * sigma
   dr_inv = 1.0_wp / dr
+  !$omp parallel default( none ) shared( n, lat_vecs, r_lat, dr_inv ) &
+  !$omp                          private( i, j, igx, igy, igz, rij, rij_sq, g_offset, sep, bin ) &
+  !$omp                          reduction( +:rdf )
+  !$omp do
   Do i = 1, n - 1
      Do j = i + 1, n
         rij = r_lat( :, i ) - r_lat( :, j )
@@ -501,6 +463,8 @@ Program hsmc
         End Do
      End Do
   End Do
+  !$omp end do
+  !$omp end parallel
   Open( 11, file = 'rdf.dat' )
   Do i = Lbound( rdf, Dim = 1 ), Ubound( rdf, Dim = 1 )
      sep = i * dr
@@ -526,4 +490,91 @@ Program hsmc
      Write( 10, '( 3( g26.20, 1x ) )' ) r_lat( :, i )
   End Do
 
+Contains
+
+  Pure Function check_overlap( sigma, imove, r_new, lat_vecs, boxes ) Result( overlap )
+
+    Use numbers_module, Only : wp
+    Use lattice_module, Only : lattice
+    Use box_module    , Only : box
+  
+    Implicit None
+
+    Real( wp )                              , Intent( In ) :: sigma
+    Integer                                 , Intent( In ) :: imove
+    Real( wp )     , Dimension( 1:3 )       , Intent( In ) :: r_new
+    Type( lattice )                         , Intent( In ) :: lat_vecs
+    Type( box )    , Dimension( 0:, 0:, 0: ), Intent( In ) :: boxes
+
+    Real( wp ), Dimension( 1:3 ) :: g_offset
+    Real( wp ), Dimension( 1:3 ) :: f
+    Real( wp ), Dimension( 1:3 ) :: r
+
+    Real( wp ) :: rij_sq
+    
+    Integer :: bx_new, by_new, bz_new
+    Integer :: inx, iny, inz
+    Integer :: nbx, nby, nbz
+    Integer :: ibx, iby, ibz
+    Integer :: i
+    
+    Logical :: overlap
+
+    overlap = .False.
+    
+    nbx = Size( boxes, Dim = 1 )
+    nby = Size( boxes, Dim = 2 )
+    nbz = Size( boxes, Dim = 3 )
+
+    f = lat_vecs%direct_to_frac( r_new )
+    bx_new = Int( f( 1 ) * nbx )
+    by_new = Int( f( 2 ) * nby )
+    bz_new = Int( f( 3 ) * nbz )
+
+    Outer_neighbour: Do inx = -1, 1
+       Do iny = -1, 1
+          Do inz = -1, 1
+             ibx = bx_new + inx
+             iby = by_new + iny
+             ibz = bz_new + inz
+             g_offset = 0.0_wp
+             If( bx_new + inx == nbx ) Then
+                ibx = 0
+                g_offset = g_offset + lat_vecs%dir_vecs( :, 1 )
+             End If
+             If( bx_new + inx == -1 ) Then
+                ibx = nbx - 1
+                g_offset = g_offset - lat_vecs%dir_vecs( :, 1 )
+             End If
+             If( by_new + iny == nby ) Then
+                iby = 0
+                g_offset = g_offset + lat_vecs%dir_vecs( :, 2 )
+             End If
+             If( by_new + iny == -1 ) Then
+                iby = nby - 1
+                g_offset = g_offset - lat_vecs%dir_vecs( :, 2 )
+             End If
+             If( bz_new + inz == nbz ) Then
+                ibz = 0
+                g_offset = g_offset + lat_vecs%dir_vecs( :, 3 )
+             End If
+             If( bz_new + inz == -1 ) Then
+                ibz = nbz - 1
+                g_offset = g_offset - lat_vecs%dir_vecs( :, 3 )
+             End If
+             Do i = 1, boxes( ibx, iby, ibz )%n
+                If( inx == 0 .And. iny == 0 .And. inz == 0 .And. imove == i ) Cycle
+                r = boxes( ibx, iby, ibz )%r( :, i )
+                rij_sq = Dot_product( r + g_offset - r_new, r + g_offset - r_new )
+                overlap = rij_sq < sigma * sigma
+                If( overlap ) Then
+                   Exit Outer_neighbour
+                End If
+             End Do
+          End Do
+       End Do
+    End Do Outer_neighbour
+
+  End Function check_overlap
+  
 End Program hsmc
