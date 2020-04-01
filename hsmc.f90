@@ -181,7 +181,7 @@ Program hsmc
   Real( wp ), Dimension( 1:3, 1:3 ) :: v
 
   Real( wp ), Dimension( 1:3 ) :: f
-  Real( wp ), Dimension( 1:3 ) :: r, r_new
+  Real( wp ), Dimension( 1:3 ) :: r_new
   Real( wp ), Dimension( 1:3 ) :: rand
   Real( wp ), Dimension( 1:3 ) :: swap
   Real( wp ), Dimension( 1:3 ) :: g_offset
@@ -196,18 +196,15 @@ Program hsmc
   Real( wp ) :: move_fac
   Real( wp ) :: rij_sq
   Real( wp ) :: accept_frac
-  Real( wp ) :: r_min
   Real( wp ) :: dr, dr_inv, norm, sep
 
   Integer :: n, n_lat, nt, nover
   Integer :: nbx, nby, nbz
   Integer :: bx, by, bz
-  Integer :: bx_new, by_new, bz_new
   Integer :: nx, ny, nz
   Integer :: iat
   Integer :: i, j
   Integer :: ix, iy, iz
-  Integer :: inx, iny, inz
   Integer :: ibx, iby, ibz
   Integer :: igx, igy, igz
   Integer :: accept, accept_tot
@@ -218,7 +215,7 @@ Program hsmc
   Integer( Selected_int_kind( 18 ) ) :: mc_step
   Integer( Selected_int_kind( 18 ) ) :: n_step
 
-  Logical :: overlap
+  Logical :: overlap, overlap_i
 
   Write( *, * ) 'Vectors ?'
   Read ( *, * ) v
@@ -293,37 +290,7 @@ Program hsmc
      nt = nt - 1
   End Do
 
-  ! Check minimum separtion is OK
-  Call system_clock( start, rate )
-  r_min = Huge( r_min )
-  !$omp parallel default( none ) shared( n, lat_vecs, r_lat ) &
-  !$omp                          private( i, j, igx, igy, igz, rij, rij_sq, g_offset ) &
-  !$omp                          reduction( min:r_min )
-  !$omp do
-  Do i = 1, n - 1
-     Do j = i + 1, n
-        rij = r_lat( :, i ) - r_lat( :, j )
-        Do inx = -1, 1
-           Do iny = -1, 1
-              Do inz = -1, 1
-                 g_offset = Matmul( lat_vecs%dir_vecs, Real( [ inx, iny, inz ], wp ) )
-                 If( Dot_product( rij + g_offset, rij + g_offset ) < r_min ) Then
-                    r_min = Dot_product( rij + g_offset, rij + g_offset )
-                 End If
-              End Do
-           End Do
-        End Do
-     End Do
-  End Do
-  !$omp end do
-  !$omp end parallel
-  Call system_clock( finish, rate )
-  Write( *, * ) 'Minimum separation, sigma, ratio'
-  Write( *, * ) Sqrt( r_min ), sigma,  Sqrt( r_min ) / sigma
-  Write( *, * ) 'Check time: ', Real( finish - start ) / rate
-  If( r_min < sigma * sigma ) Then
-     Stop "Overlaps in original config"
-  End If
+  ! Check inital separtion is OK
 
   Do i = 1, n
      f = lat_vecs%direct_to_frac( r_lat( :, i ) )
@@ -333,6 +300,25 @@ Program hsmc
      Call boxes( bx, by, bz )%add_entry( r_lat( :, i ) )
   End Do
 
+  ! Check inital separtion is OK
+  Call system_clock( start, rate )
+  overlap = .False.
+  Do ibx = 0, nbx - 1
+     Do iby = 0, nby - 1
+        Do ibz = 0, nbz - 1
+           Do i = 1, boxes( ibx, iby, ibz )%n
+              Call check_overlap( sigma, i, boxes( ibx, iby, ibz )%r( :, i ), lat_vecs, [ ibx, iby, ibz ], boxes, overlap_i )
+              overlap = overlap .Or. overlap_i
+           End Do
+        End Do
+     End Do
+  End Do
+  Call system_clock( finish, rate )
+  Write( *, * ) 'Check time: ', Real( finish - start ) / rate
+  If( overlap ) Then
+     Stop "Overlaps in initial config"
+  End If
+  
   move_fac = 0.5_wp
   accept = 0
   accept_tot = 0
@@ -354,13 +340,8 @@ Program hsmc
      r_new = boxes( bx, by, bz )%r( :, imove ) + ( rand - 0.5_wp ) * sigma * move_fac
      r_new = lat_vecs%translate_to_reference( r_new )
 
-     f = lat_vecs%direct_to_frac( r_new )
-     bx_new = Int( f( 1 ) * nbx )
-     by_new = Int( f( 2 ) * nby )
-     bz_new = Int( f( 3 ) * nbz )
-
-     overlap = check_overlap( sigma, imove, r_new, lat_vecs, boxes ) 
-
+     Call check_overlap( sigma, imove, r_new, lat_vecs, [ bx, by, bz ], boxes, overlap )
+     
      If( .Not. overlap ) Then
         Call boxes( bx, by, bz )%delete_entry( imove )
         f = lat_vecs%direct_to_frac( r_new )
@@ -391,6 +372,26 @@ Program hsmc
 
   Write( *, * ) 'Number of moves made: ', accept_tot
 
+  ! Check minimum separation is still OK
+  Call system_clock( start, rate )
+  overlap = .False.
+  Do ibx = 0, nbx - 1
+     Do iby = 0, nby - 1
+        Do ibz = 0, nbz - 1
+           Do i = 1, boxes( ibx, iby, ibz )%n
+              Call check_overlap( sigma, i, boxes( ibx, iby, ibz )%r( :, i ), lat_vecs, [ ibx, iby, ibz ], boxes, overlap_i )
+              overlap = overlap .Or. overlap_i
+           End Do
+        End Do
+     End Do
+  End Do
+  Call system_clock( finish, rate )
+  Write( *, * ) 'Check time: ', Real( finish - start ) / rate
+  If( overlap ) Then
+     Stop "Overlaps in final config"
+  End If
+
+  ! Take out of boxes for rdf calc
   nt = 0
   Do ibx = 0, nbx - 1
      Do iby = 0, nby - 1
@@ -403,41 +404,9 @@ Program hsmc
      End Do
   End Do
 
-  ! Check minimum separation is still OK
-  r_min = Huge( r_min )
-  Call system_clock( start, rate )
-  !$omp parallel default( none ) shared( n, lat_vecs, r_lat ) &
-  !$omp                          private( i, j, igx, igy, igz, rij, rij_sq, g_offset ) &
-  !$omp                          reduction( min:r_min )
-  !$omp do
-  Do i = 1, n - 1
-     Do j = i + 1, n
-        rij = r_lat( :, i ) - r_lat( :, j )
-        Do igx = -1, 1
-           Do igy = -1, 1
-              Do igz = -1, 1
-                 g_offset = Matmul( lat_vecs%dir_vecs, Real( [ igx, igy, igz ], wp ) )
-                 rij_sq = Dot_product( rij + g_offset, rij + g_offset )
-                 If( rij_sq < r_min ) Then
-                    r_min = rij_sq
-                 End If
-              End Do
-           End Do
-        End Do
-     End Do
-  End Do
-  !$omp end do
-  !$omp end parallel
-  Call system_clock( finish, rate )
-  Write( *, * ) 'Minimum separation, sigma, ratio'
-  Write( *, * ) Sqrt( r_min ), sigma, Sqrt( r_min ) / sigma
-  Write( *, * ) 'Check time: ', Real( finish - start ) / rate
-  If( r_min < sigma * sigma ) Then
-     Stop "Overlaps in final config"
-  End If
-
   Write( *, * ) 'Calculating rdf'
   ! Calculate an rdf
+  Call system_clock( start, rate )
   rdf = 0.0_wp
   dr = 0.05_wp * sigma
   dr_inv = 1.0_wp / dr
@@ -465,6 +434,8 @@ Program hsmc
   End Do
   !$omp end do
   !$omp end parallel
+  Call system_clock( finish, rate )
+  Write( *, * ) 'RDF time: ', Real( finish - start ) / rate
   Open( 11, file = 'rdf.dat' )
   Do i = Lbound( rdf, Dim = 1 ), Ubound( rdf, Dim = 1 )
      sep = i * dr
@@ -492,36 +463,37 @@ Program hsmc
 
 Contains
 
-  Pure Function check_overlap( sigma, imove, r_new, lat_vecs, boxes ) Result( overlap )
+!!$  Pure Subroutine check_overlap( sigma, imove, r_new, lat_vecs, boxes, overlap )
+  Subroutine check_overlap( sigma, imove, r_new, lat_vecs, bx_old, boxes, overlap )
 
     Use numbers_module, Only : wp
     Use lattice_module, Only : lattice
     Use box_module    , Only : box
-  
+
     Implicit None
 
-    Real( wp )                              , Intent( In ) :: sigma
-    Integer                                 , Intent( In ) :: imove
-    Real( wp )     , Dimension( 1:3 )       , Intent( In ) :: r_new
-    Type( lattice )                         , Intent( In ) :: lat_vecs
-    Type( box )    , Dimension( 0:, 0:, 0: ), Intent( In ) :: boxes
+    Real( wp )                              , Intent( In    ) :: sigma
+    Integer                                 , Intent( In    ) :: imove
+    Real( wp )     , Dimension( 1:3 )       , Intent( In    ) :: r_new
+    Type( lattice )                         , Intent( In    ) :: lat_vecs
+    Integer        , Dimension( 1:3 )       , Intent( In    ) :: bx_old
+    Type( box )    , Dimension( 0:, 0:, 0: ), Intent( In    ) :: boxes
+    Logical                                 , Intent(   Out ) :: overlap
 
     Real( wp ), Dimension( 1:3 ) :: g_offset
     Real( wp ), Dimension( 1:3 ) :: f
     Real( wp ), Dimension( 1:3 ) :: r
 
     Real( wp ) :: rij_sq
-    
+
     Integer :: bx_new, by_new, bz_new
     Integer :: inx, iny, inz
     Integer :: nbx, nby, nbz
     Integer :: ibx, iby, ibz
     Integer :: i
-    
-    Logical :: overlap
 
     overlap = .False.
-    
+
     nbx = Size( boxes, Dim = 1 )
     nby = Size( boxes, Dim = 2 )
     nbz = Size( boxes, Dim = 3 )
@@ -531,50 +503,62 @@ Contains
     by_new = Int( f( 2 ) * nby )
     bz_new = Int( f( 3 ) * nbz )
 
+    !$omp parallel default( none ) Shared( sigma, nbx, nby, nbz, bx_new, by_new, bz_new, lat_vecs, boxes, bx_old, imove, r_new ) &
+    !$omp                          Private( inx, iny, inz, ibx, iby, ibz, g_offset, i, r, rij_sq ) &
+    !$omp                          Reduction( .Or. : overlap )
+    !$omp do
     Outer_neighbour: Do inx = -1, 1
        Do iny = -1, 1
           Do inz = -1, 1
-             ibx = bx_new + inx
-             iby = by_new + iny
-             ibz = bz_new + inz
-             g_offset = 0.0_wp
-             If( bx_new + inx == nbx ) Then
-                ibx = 0
-                g_offset = g_offset + lat_vecs%dir_vecs( :, 1 )
-             End If
-             If( bx_new + inx == -1 ) Then
-                ibx = nbx - 1
-                g_offset = g_offset - lat_vecs%dir_vecs( :, 1 )
-             End If
-             If( by_new + iny == nby ) Then
-                iby = 0
-                g_offset = g_offset + lat_vecs%dir_vecs( :, 2 )
-             End If
-             If( by_new + iny == -1 ) Then
-                iby = nby - 1
-                g_offset = g_offset - lat_vecs%dir_vecs( :, 2 )
-             End If
-             If( bz_new + inz == nbz ) Then
-                ibz = 0
-                g_offset = g_offset + lat_vecs%dir_vecs( :, 3 )
-             End If
-             If( bz_new + inz == -1 ) Then
-                ibz = nbz - 1
-                g_offset = g_offset - lat_vecs%dir_vecs( :, 3 )
-             End If
-             Do i = 1, boxes( ibx, iby, ibz )%n
-                If( inx == 0 .And. iny == 0 .And. inz == 0 .And. imove == i ) Cycle
-                r = boxes( ibx, iby, ibz )%r( :, i )
-                rij_sq = Dot_product( r + g_offset - r_new, r + g_offset - r_new )
-                overlap = rij_sq < sigma * sigma
-                If( overlap ) Then
-                   Exit Outer_neighbour
+             ! Do it this way so can opempise loops
+             If( .Not. overlap ) Then
+                ibx = bx_new + inx
+                iby = by_new + iny
+                ibz = bz_new + inz
+                g_offset = 0.0_wp
+                If( bx_new + inx == nbx ) Then
+                   ibx = 0
+                   g_offset = g_offset + lat_vecs%dir_vecs( :, 1 )
                 End If
-             End Do
+                If( bx_new + inx == -1 ) Then
+                   ibx = nbx - 1
+                   g_offset = g_offset - lat_vecs%dir_vecs( :, 1 )
+                End If
+                If( by_new + iny == nby ) Then
+                   iby = 0
+                   g_offset = g_offset + lat_vecs%dir_vecs( :, 2 )
+                End If
+                If( by_new + iny == -1 ) Then
+                   iby = nby - 1
+                   g_offset = g_offset - lat_vecs%dir_vecs( :, 2 )
+                End If
+                If( bz_new + inz == nbz ) Then
+                   ibz = 0
+                   g_offset = g_offset + lat_vecs%dir_vecs( :, 3 )
+                End If
+                If( bz_new + inz == -1 ) Then
+                   ibz = nbz - 1
+                   g_offset = g_offset - lat_vecs%dir_vecs( :, 3 )
+                End If
+                atom_box_loop: Do i = 1, boxes( ibx, iby, ibz )%n
+!!$                If( inx == 0 .And. iny == 0 .And. inz == 0 .And. imove == i ) Cycle
+                   If( All( [ ibx, iby, ibz ] == bx_old ) .And. imove == i ) Cycle
+                   r = boxes( ibx, iby, ibz )%r( :, i )
+                   rij_sq = Dot_product( r + g_offset - r_new, r + g_offset - r_new )
+                   overlap = rij_sq < sigma * sigma
+                   If( overlap ) Then
+                      ! Do it this was so can openmpise the outer loops 
+!!$                   Exit Outer_neighbour
+                      Exit atom_box_loop
+                   End If
+                End Do atom_box_loop
+             End If
           End Do
        End Do
     End Do Outer_neighbour
+    !$omp end do
+    !$omp end parallel
 
-  End Function check_overlap
+  End Subroutine check_overlap
   
 End Program hsmc
