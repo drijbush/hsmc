@@ -170,7 +170,7 @@ Program hsmc
   Implicit None
 
   Integer, Parameter :: n_refine = 10000
-  Integer, Parameter :: n_bin = 100
+  Integer, Parameter :: n_bin = 1000
 
   Type( lattice ) :: lat_vecs
 
@@ -206,6 +206,8 @@ Program hsmc
   Integer :: i, j
   Integer :: ix, iy, iz
   Integer :: ibx, iby, ibz
+  Integer :: inx, iny, inz
+  Integer :: jbx, jby, jbz
   Integer :: igx, igy, igz
   Integer :: accept, accept_tot
   Integer :: imove
@@ -404,39 +406,115 @@ Program hsmc
      End Do
   End Do
 
-  Write( *, * ) 'Calculating rdf'
-  ! Calculate an rdf
+!!$  Write( *, * ) 'Calculating rdf'
+!!$  ! Calculate an rdf
+!!$  Call system_clock( start, rate )
+!!$  rdf = 0.0_wp
+!!$  dr = 0.05_wp * sigma
+!!$  dr_inv = 1.0_wp / dr
+!!$  !$omp parallel default( none ) shared( n, lat_vecs, r_lat, dr_inv ) &
+!!$  !$omp                          private( i, j, igx, igy, igz, rij, rij_sq, g_offset, sep, bin ) &
+!!$  !$omp                          reduction( +:rdf )
+!!$  !$omp do
+!!$  Do i = 1, n - 1
+!!$     Do j = i + 1, n
+!!$        rij = r_lat( :, i ) - r_lat( :, j )
+!!$        Do igx = -1, 1
+!!$           Do igy = -1, 1
+!!$              Do igz = -1, 1
+!!$                 g_offset = Matmul( lat_vecs%dir_vecs, Real( [ igx, igy, igz ], wp ) )
+!!$                 rij_sq = Dot_product( rij + g_offset, rij + g_offset )
+!!$                 sep = Sqrt( rij_sq )
+!!$                 bin = Int( sep * dr_inv )
+!!$                 If( bin >= Lbound( rdf, Dim = 1 ) .And. bin <= Ubound( rdf, Dim = 1 ) ) Then
+!!$                    rdf( bin ) = rdf( bin ) + 2.0_wp
+!!$                 End If
+!!$              End Do
+!!$           End Do
+!!$        End Do
+!!$     End Do
+!!$  End Do
+!!$  !$omp end do
+!!$  !$omp end parallel
+!!$  Call system_clock( finish, rate )
+!!$  Write( *, * ) 'RDF time: ', Real( finish - start ) / rate
+!!$  Open( 11, file = 'rdf.dat' )
+!!$  Do i = Lbound( rdf, Dim = 1 ), Ubound( rdf, Dim = 1 )
+!!$     sep = i * dr
+!!$     norm = ( sep + dr ) ** 3 - sep ** 3
+!!$     ! Just be a little careful about integer overflow
+!!$     norm = norm * n
+!!$     norm = norm * n
+!!$     norm = 3.0_wp / ( 16.0_wp * Atan( 1.0_wp ) * norm )
+!!$     Write( 21, * ) sep / sigma, rdf( i )
+!!$     rdf( i ) = rdf( i ) * norm
+!!$     Write( 11, * ) sep / sigma, rdf( i )
+!!$  End Do
+
   Call system_clock( start, rate )
+  ! Second attempt at rdf based on boxes
   rdf = 0.0_wp
-  dr = 0.05_wp * sigma
+  dr = ( 5.0_wp / n_bin ) * sigma
   dr_inv = 1.0_wp / dr
-  !$omp parallel default( none ) shared( n, lat_vecs, r_lat, dr_inv ) &
-  !$omp                          private( i, j, igx, igy, igz, rij, rij_sq, g_offset, sep, bin ) &
-  !$omp                          reduction( +:rdf )
-  !$omp do
-  Do i = 1, n - 1
-     Do j = i + 1, n
-        rij = r_lat( :, i ) - r_lat( :, j )
-        Do igx = -1, 1
-           Do igy = -1, 1
-              Do igz = -1, 1
-                 g_offset = Matmul( lat_vecs%dir_vecs, Real( [ igx, igy, igz ], wp ) )
-                 rij_sq = Dot_product( rij + g_offset, rij + g_offset )
-                 sep = Sqrt( rij_sq )
-                 bin = Int( sep * dr_inv )
-                 If( bin >= Lbound( rdf, Dim = 1 ) .And. bin <= Ubound( rdf, Dim = 1 ) ) Then
-                    rdf( bin ) = rdf( bin ) + 2.0_wp
-                 End If
+  ! Loop over boxes
+  Do ibx = 0, nbx - 1
+     Do iby = 0, nby - 1
+        Do ibz = 0, nbz - 1
+           ! Loop over displacements relative to reference box
+           Do inx = -2, 2
+              Do iny = -2, 2
+                 Do inz = -2, 2
+                    ! Apply PBC
+                    jbx = ibx + inx
+                    jby = iby + iny
+                    jbz = ibz + inz
+                    g_offset = 0.0_wp
+                    If( jbx >= nbx ) Then
+                       jbx = jbx - nbx
+                       g_offset = g_offset + lat_vecs%dir_vecs( :, 1 )
+                    End If
+                    If( jbx <= -1 ) Then
+                       jbx = jbx + nbx
+                       g_offset = g_offset - lat_vecs%dir_vecs( :, 1 )
+                    End If
+                    If( jby >= nby ) Then
+                       jby = jby - nby
+                       g_offset = g_offset + lat_vecs%dir_vecs( :, 2 )
+                    End If
+                    If( jby <= -1 ) Then
+                       jby = jby + nby
+                       g_offset = g_offset - lat_vecs%dir_vecs( :, 2 )
+                    End If
+                    If( jbz >= nbz ) Then
+                       jbz = jbz - nbz
+                       g_offset = g_offset + lat_vecs%dir_vecs( :, 3 )
+                    End If
+                    If( jbz <= -1 ) Then
+                       jbz = jbz + nbz
+                       g_offset = g_offset - lat_vecs%dir_vecs( :, 3 )
+                    End If
+                    Do i = 1, boxes( ibx, iby, ibz )%n
+                       Do j = 1, boxes( jbx, jby, jbz )%n
+                          If( All( [ ibx, iby, ibz ] == [ jbx, jby, jbz ] ) .And. i == j ) Cycle
+                          rij = boxes( ibx, iby, ibz )%r( :, i ) - boxes( jbx, jby, jbz )%r( :, j )
+                          rij = rij - g_offset
+                          rij_sq = Dot_product( rij, rij )
+                          sep = Sqrt( rij_sq )
+                          bin = Int( sep * dr_inv )
+                          If( bin >= Lbound( rdf, Dim = 1 ) .And. bin <= Ubound( rdf, Dim = 1 ) ) Then
+                             rdf( bin ) = rdf( bin ) + 1.0_wp
+                          End If
+                       End Do
+                    End Do
+                 End Do
               End Do
            End Do
         End Do
      End Do
   End Do
-  !$omp end do
-  !$omp end parallel
   Call system_clock( finish, rate )
-  Write( *, * ) 'RDF time: ', Real( finish - start ) / rate
-  Open( 11, file = 'rdf.dat' )
+  Write( *, * ) 'RDF2 time: ', Real( finish - start ) / rate
+  Open( 12, file = 'rdf2.dat' )
   Do i = Lbound( rdf, Dim = 1 ), Ubound( rdf, Dim = 1 )
      sep = i * dr
      norm = ( sep + dr ) ** 3 - sep ** 3
@@ -444,10 +522,11 @@ Program hsmc
      norm = norm * n
      norm = norm * n
      norm = 3.0_wp / ( 16.0_wp * Atan( 1.0_wp ) * norm )
+     Write( 22, * ) sep / sigma, rdf( i )
      rdf( i ) = rdf( i ) * norm
-     Write( 11, * ) sep / sigma, rdf( i )
+     Write( 12, * ) sep / sigma, rdf( i )
   End Do
-
+                       
   Open( 10, file = 'config.dat' )
   Write( 10, '( "n = ", i0, 1x, "V = ", f0.3, 1x, "rho = ", f0.3 )' ) n, lat_vecs%V, rho
   Do i = 1, 3
@@ -506,7 +585,7 @@ Contains
     !$omp parallel default( none ) Shared( sigma, nbx, nby, nbz, bx_new, by_new, bz_new, lat_vecs, boxes, bx_old, imove, r_new ) &
     !$omp                          Private( inx, iny, inz, ibx, iby, ibz, g_offset, i, r, rij_sq ) &
     !$omp                          Reduction( .Or. : overlap )
-    !$omp do
+    !$omp do collapse( 3 )
     Outer_neighbour: Do inx = -1, 1
        Do iny = -1, 1
           Do inz = -1, 1
